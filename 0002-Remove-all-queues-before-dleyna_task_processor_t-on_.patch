@@ -1,0 +1,113 @@
+From 1de3325c201dc0e1132bd34ea6f952ff8acbcf80 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <debarshir@freedesktop.org>
+Date: Fri, 16 Sep 2016 08:41:48 +0200
+Subject: [PATCH 2/2] Remove all queues before
+ dleyna_task_processor_t->on_quit_cb is run
+
+If dleyna_task_processor_t->on_quit_cb is run while there are still
+queues present in the processor, it can lead to a crash if one of the
+queue's task_queue_finally_cb handler didn't expect to be run after
+the control point has been stopped. For example,
+dleyna-renderer-service crashes with this backtrace:
+
+%0  __GI_raise (sig=sig@entry=6)
+    at ../sysdeps/unix/sysv/linux/raise.c:54
+%1  __GI_abort () at abort.c:89
+%2  g_assertion_message (domain="GLib",
+                         file="ghash.c",
+                         line=373,
+                         func="g_hash_table_lookup_node",
+                         message="assertion failed:
+                                  (hash_table->ref_count > 0)")
+    at gtestutils.c:2429
+%3  g_assertion_message_expr (domain="GLib",
+                              file="ghash.c",
+                              line=373,
+                              func="g_hash_table_lookup_node",
+                              expr="hash_table->ref_count > 0")
+    at gtestutils.c:2452
+%4  g_hash_table_lookup_node (hash_return=<synthetic pointer>,
+                              key=0x561e98ca21c0,
+                              hash_table=0x561e985899e0)
+    at ghash.c:373
+%5  g_hash_table_insert_internal (hash_table=0x561e985899e0,
+                                  key=0x561e98ca21c0,
+                                  value=0x561e98a581f0,
+                                  keep_new_key=0)
+    at ghash.c:1227
+%6  prv_device_chain_end (cancelled=<optimized out>,
+                          data=0x561e98e3acb0)
+    at upnp.c:85
+%7  prv_free_cb (data=0x561e98b97280)
+    at libdleyna/core/task-processor.c:103
+%8  g_hash_table_remove_all_nodes (hash_table=0x561e98549240,
+                                   notify=<optimized out>,
+                                   destruction=<optimized out>)
+    at ghash.c:548
+%9  g_hash_table_remove_all_nodes (destruction=1,
+                                   notify=1,
+                                   hash_table=0x561e98549240)
+    at ghash.c:1093
+%10 g_hash_table_unref (hash_table=0x561e98549240) at ghash.c:1097
+%11 dleyna_task_processor_free (processor=0x561e985543a0)
+    at libdleyna/core/task-processor.c:136
+%12 prv_context_free () at libdleyna/core/main-loop.c:108
+%13 dleyna_main_loop_start (server=<optimized out>,
+                            control_point=<optimized out>,
+                            user_data=0x0)
+    at libdleyna/core/main-loop.c:167
+%14 __libc_start_main (main=0x561e97db5990 <main>,
+                       argc=1,
+                       argv=0x7fff905cb0a8,
+                       init=<optimized out>,
+                       fini=<optimized out>,
+                       rtld_fini=<optimized out>,
+                       stack_end=0x7fff905cb098)
+    at ../csu/libc-start.c:289
+%15 _start ()
+
+The processor's on_quit_cb handler is set to prv_context_quit_cb,
+which calls control_point->stop_service and quits the GMainLoop. Then
+the processor is destroyed, which in turn destroys any queues that
+might have been left inside it. Unfortunately, a queue's
+task_queue_finally_cb handler might be set to something that assumes
+that the control_point has not been stopped. For example,
+dleyna-renderer-service sets task_queue_finally_cb to
+prv_device_chain_end, which will crash due to accessing invalid memory
+(specifically the dlr_upnp_t) if prv_control_point_stop_service has
+already been invoked. We see the same problem in dleyna-server-service
+too.
+
+Therefore, let's remove any leftover queues from the processor just
+before dleyna_task_processor_t->on_quit_cb is scheduled to run. We are
+about to terminate the process anyway, so it shouldn't hurt to do it
+slightly earlier in the sequence.
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1360209
+---
+ libdleyna/core/task-processor.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/libdleyna/core/task-processor.c b/libdleyna/core/task-processor.c
+index 6d7f5b87de3d..89f0386c3f98 100644
+--- a/libdleyna/core/task-processor.c
++++ b/libdleyna/core/task-processor.c
+@@ -257,6 +257,7 @@ void dleyna_task_processor_set_quitting(dleyna_task_processor_t *processor)
+ 		g_idle_add(processor->on_quit_cb, NULL);
+ 
+ 	prv_cancel_all_queues(processor);
++	g_hash_table_remove_all(processor->task_queues);
+ 
+ 	DLEYNA_LOG_DEBUG("Exit");
+ }
+@@ -460,6 +461,7 @@ void dleyna_task_queue_task_completed(const dleyna_task_queue_key_t *queue_id)
+ 
+ 	if (processor->quitting && !processor->running_tasks) {
+ 		g_idle_add(processor->on_quit_cb, NULL);
++		g_hash_table_remove_all(processor->task_queues);
+ 	} else if (queue->defer_remove) {
+ 		DLEYNA_LOG_DEBUG("Removing queue <%s,%s>",
+ 				 queue_id->source, queue_id->sink);
+-- 
+2.7.4
+

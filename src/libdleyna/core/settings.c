@@ -35,6 +35,8 @@ struct dleyna_settings_t_ {
 	/* Global section */
 	gboolean never_quit;
 	gchar *connector_name;
+	guint port;
+	guint push_host_port;
 
 	/* Log section */
 	dleyna_log_type_t log_type;
@@ -48,6 +50,8 @@ struct dleyna_settings_t_ {
 #define DLEYNA_SETTINGS_GROUP_GENERAL		"general"
 #define DLEYNA_SETTINGS_KEY_NEVER_QUIT		"never-quit"
 #define DLEYNA_SETTINGS_KEY_CONNECTOR_NAME	"connector-name"
+#define DLEYNA_SETTINGS_KEY_PORT		"port"
+#define DLEYNA_SETTINGS_KEY_PUSH_HOST_PORT	"push-host-port"
 
 #define DLEYNA_SETTINGS_GROUP_LOG		"log"
 #define DLEYNA_SETTINGS_KEY_LOG_TYPE		"log-type"
@@ -75,6 +79,10 @@ do { \
 	DLEYNA_LOG_INFO("Never Quit: %s", (settings)->never_quit ? "T" : "F");\
 	DLEYNA_LOG_DEBUG_NL(); \
 	DLEYNA_LOG_INFO("Connector Name: %s", (settings)->connector_name);\
+	DLEYNA_LOG_DEBUG_NL(); \
+	DLEYNA_LOG_INFO("Port: %u", (settings)->port);\
+	DLEYNA_LOG_DEBUG_NL(); \
+	DLEYNA_LOG_INFO("Push host port: %u", (settings)->push_host_port);\
 	DLEYNA_LOG_DEBUG_NL(); \
 	\
 	DLEYNA_LOG_INFO("[Logging settings]"); \
@@ -245,6 +253,7 @@ static void prv_read_keys(dleyna_settings_t *settings)
 	gboolean b_val;
 	gint int_val;
 	gchar *s_val;
+	guint64 u_val;
 	gint *int_star;
 	gsize length;
 	gchar **list;
@@ -269,6 +278,30 @@ static void prv_read_keys(dleyna_settings_t *settings)
 	if (error == NULL) {
 		g_free(settings->connector_name);
 		settings->connector_name = s_val;
+	} else {
+		g_error_free(error);
+		error = NULL;
+	}
+
+	u_val = g_key_file_get_uint64(keyfile,
+				      DLEYNA_SETTINGS_GROUP_GENERAL,
+				      DLEYNA_SETTINGS_KEY_PORT,
+				      &error);
+
+	if (error == NULL) {
+		settings->port = (guint)u_val;
+	} else {
+		g_error_free(error);
+		error = NULL;
+	}
+
+	u_val = g_key_file_get_uint64(keyfile,
+				      DLEYNA_SETTINGS_GROUP_GENERAL,
+				      DLEYNA_SETTINGS_KEY_PUSH_HOST_PORT,
+				      &error);
+
+	if (error == NULL) {
+		settings->push_host_port = (guint)u_val;
 	} else {
 		g_error_free(error);
 		error = NULL;
@@ -334,6 +367,8 @@ static void prv_init_default(dleyna_settings_t *settings)
 	settings->never_quit = DLEYNA_SETTINGS_DEFAULT_NEVER_QUIT;
 	settings->connector_name = g_strdup(
 					DLEYNA_SETTINGS_DEFAULT_CONNECTOR_NAME);
+	settings->port = 0;
+	settings->push_host_port = 0;
 
 	settings->log_type = DLEYNA_SETTINGS_DEFAULT_LOG_TYPE;
 	settings->log_level = DLEYNA_SETTINGS_DEFAULT_LOG_LEVEL;
@@ -424,6 +459,16 @@ void dleyna_settings_delete(dleyna_settings_t *settings)
 const gchar *dleyna_settings_connector_name(dleyna_settings_t *settings)
 {
 	return settings->connector_name;
+}
+
+guint dleyna_settings_port(dleyna_settings_t *settings)
+{
+	return settings->port;
+}
+
+guint dleyna_settings_push_host_port(dleyna_settings_t *settings)
+{
+	return settings->push_host_port;
 }
 
 static void prv_save_settings_to_file(dleyna_settings_t *settings,

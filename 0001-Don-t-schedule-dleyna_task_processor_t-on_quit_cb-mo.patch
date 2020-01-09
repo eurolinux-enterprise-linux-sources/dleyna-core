@@ -1,0 +1,82 @@
+From dc8858944f523961edcaea5b2e5f73dfb7d14907 Mon Sep 17 00:00:00 2001
+From: Debarshi Ray <debarshir@freedesktop.org>
+Date: Thu, 15 Sep 2016 17:06:56 +0200
+Subject: [PATCH] Don't schedule dleyna_task_processor_t->on_quit_cb more than
+ once
+
+Even if there are some running tasks, cancelling all the queues will
+set processor->running_tasks to zero. It will call
+dleyna_task_queue_task_completed for each running task, which will
+keep decrementing processor->running_tasks and schedule the on_quit_cb
+handler once it is zero. Therefore, it is meaningless to check the
+value of processor->running_tasks after prv_cancel_all_queues.
+Instead, we should do it before.
+
+Otherwise, it can confuse client code which doesn't expect to have the
+on_quit_cb handler invoked multiple times. For example, it causes
+dleyna-render-service to crash with this backtrace:
+
+%0  __GI_raise (sig=sig@entry=6)
+    at ../sysdeps/unix/sysv/linux/raise.c:55
+%1  __GI_abort () at abort.c:89
+%2  __libc_message (do_abort=do_abort@entry=2,
+                    fmt=fmt@entry=0x7f89f83f0e20 "*** Error in `%s':
+                                                  %s: 0x%s ***\n")
+    at ../sysdeps/posix/libc_fatal.c:175
+%3  malloc_printerr (ar_ptr=<optimized out>,
+                     ptr=<optimized out>,
+                     str=0x7f89f83f0ee8 "double free or corruption
+                                         (fasttop)",
+                     action=3)
+    at malloc.c:5000
+%4  _int_free (av=<optimized out>,
+               p=<optimized out>,
+               have_lock=0)
+    at malloc.c:3861
+%5  __GI___libc_free (mem=<optimized out>) at malloc.c:2962
+%6  g_free (mem=0x558aa23b0000) at gmem.c:192
+%7  dlr_upnp_delete (upnp=<optimized out>) at upnp.c:423
+%8  prv_control_point_stop_service () at server.c:725
+%9  prv_context_quit_cb (user_data=<optimized out>)
+    at libdleyna/core/main-loop.c:61
+%10 g_main_dispatch (context=0x558aa237a140) at gmain.c:3122
+%11 g_main_context_dispatch (context=context@entry=0x558aa237a140)
+    at gmain.c:3737
+%12 g_main_context_iterate (context=0x558aa237a140,
+                            block=block@entry=1,
+                            dispatch=dispatch@entry=1,
+                            self=<optimized out>)
+    at gmain.c:3808
+%13 g_main_loop_run (loop=0x558aa23aecc0) at gmain.c:4002
+%14 dleyna_main_loop_start (server=<optimized out>,
+                            control_point=<optimized out>,
+                            user_data=0x0)
+    at libdleyna/core/main-loop.c:155
+%16 _start ()
+
+https://bugzilla.redhat.com/show_bug.cgi?id=1251366
+---
+ libdleyna/core/task-processor.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/libdleyna/core/task-processor.c b/libdleyna/core/task-processor.c
+index 62778971d7a6..6d7f5b87de3d 100644
+--- a/libdleyna/core/task-processor.c
++++ b/libdleyna/core/task-processor.c
+@@ -253,11 +253,11 @@ void dleyna_task_processor_set_quitting(dleyna_task_processor_t *processor)
+ 
+ 	processor->quitting = TRUE;
+ 
+-	prv_cancel_all_queues(processor);
+-
+ 	if (processor->running_tasks == 0)
+ 		g_idle_add(processor->on_quit_cb, NULL);
+ 
++	prv_cancel_all_queues(processor);
++
+ 	DLEYNA_LOG_DEBUG("Exit");
+ }
+ 
+-- 
+2.7.4
+
